@@ -242,6 +242,12 @@ export default function App() {
   const hourlyWindowSize = 12;
   const [showHourlyDetails, setShowHourlyDetails] = useState(false);
   const latestRequestRef = useRef(0);
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("weather-dashboard-theme");
+    if (saved === "light" || saved === "dark") return saved;
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return prefersDark ? "dark" : "light";
+  });
 
   const unitSymbol = unit === "celsius" ? "°C" : "°F";
   const windUnit = unit === "celsius" ? "km/h" : "mph";
@@ -249,6 +255,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(recentSearches));
   }, [recentSearches]);
+
+  useEffect(() => {
+    localStorage.setItem("weather-dashboard-theme", theme);
+  }, [theme]);
 
   const forecastCards = useMemo(() => {
     if (!weather?.daily) return [];
@@ -382,13 +392,20 @@ export default function App() {
     const actualValues = visibleHourlyCards.map((item) => item.temp ?? 0);
     const width = Math.max(1100, feelsValues.length * 50);
     const height = 280;
-    const padding = 24;
+    const padding = 52;
     const combinedValues = [...feelsValues, ...actualValues];
     const min = Math.min(...combinedValues);
     const max = Math.max(...combinedValues);
     const avg = feelsValues.reduce((sum, value) => sum + value, 0) / feelsValues.length;
     const feelsPoints = buildLinePointsWithDomain(feelsValues, width, height, padding, min, max);
     const actualPoints = buildLinePointsWithDomain(actualValues, width, height, padding, min, max);
+    const tickCount = 5;
+    const yTicks = Array.from({ length: tickCount }, (_, index) => {
+      const ratio = index / (tickCount - 1);
+      const value = max - ratio * (max - min);
+      const y = padding + ratio * (height - padding * 2);
+      return { value, y };
+    });
 
     return {
       width,
@@ -401,6 +418,7 @@ export default function App() {
       min,
       max,
       avg,
+      yTicks,
     };
   }, [visibleHourlyCards]);
 
@@ -415,7 +433,7 @@ export default function App() {
 
     const chartWidth = Math.max(900, visibleHourlyCards.length * 90);
     const chartHeight = 280;
-    const padding = 24;
+    const padding = 52;
 
     const temperatures = visibleHourlyCards.map((item) => item.temp ?? 0);
     const windspeeds = visibleHourlyCards.map((item) => item.windspeed ?? 0);
@@ -425,6 +443,13 @@ export default function App() {
     const tempMin = Math.min(...temperatures);
     const tempMaxIndex = temperatures.indexOf(tempMax);
     const tempMinIndex = temperatures.indexOf(tempMin);
+    const tickCount = 5;
+    const yTicks = Array.from({ length: tickCount }, (_, index) => {
+      const ratio = index / (tickCount - 1);
+      const value = tempMax - ratio * (tempMax - tempMin);
+      const y = padding + ratio * (chartHeight - padding * 2);
+      return { value, y };
+    });
 
     return {
       width: chartWidth,
@@ -449,6 +474,7 @@ export default function App() {
       tempMinIndex,
       tempMaxTime: visibleHourlyCards[tempMaxIndex]?.time ?? null,
       tempMinTime: visibleHourlyCards[tempMinIndex]?.time ?? null,
+      yTicks,
     };
   }, [visibleHourlyCards]);
 
@@ -763,7 +789,7 @@ export default function App() {
   }, []);
 
   return (
-    <main className="app-shell min-h-screen bg-gradient-to-b from-sky-950 to-slate-950 text-slate-100">
+    <main className={`app-shell theme-${theme} min-h-screen bg-gradient-to-b from-sky-950 to-slate-950 text-slate-100`}>
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 px-6 py-10 lg:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="hidden lg:block">
           <div className="glass-panel sticky top-6 animate-fade-in rounded-xl p-4">
@@ -794,8 +820,19 @@ export default function App() {
         </aside>
         <div className="flex flex-col gap-6">
         <header className="space-y-2">
-          <h1 className="text-4xl font-bold tracking-tight">Weather Dashboard</h1>
-          <p className="text-slate-300">Search any city to view current weather and a 5-day forecast.</p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-4xl font-bold tracking-tight">Weather Dashboard</h1>
+              <p className="text-slate-300">Search any city to view current weather and a 5-day forecast.</p>
+            </div>
+            <button
+              className="rounded-lg border border-slate-600 bg-slate-900/70 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400"
+              onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
+              type="button"
+            >
+              {theme === "dark" ? "Light mode" : "Dark mode"}
+            </button>
+          </div>
         </header>
 
         <section className="animate-fade-in relative z-30 rounded-xl border border-sky-700/40 bg-slate-900/40 p-5">
@@ -805,6 +842,10 @@ export default function App() {
                 className="w-full rounded-lg border border-slate-600 bg-slate-900/80 px-4 py-3 text-slate-100 outline-none transition-all duration-200 focus:border-sky-400"
                 placeholder="Search city (e.g. St. John's, London, Tokyo)"
                 value={query}
+                aria-autocomplete="list"
+                aria-controls="city-suggestions-list"
+                aria-expanded={showSuggestions}
+                aria-label="Search city"
                 onChange={(event) => {
                   setQuery(event.target.value);
                   setIsSearchFocused(true);
@@ -819,13 +860,27 @@ export default function App() {
                 onBlur={() => {
                   setIsSearchFocused(false);
                 }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setShowSuggestions(false);
+                    setIsSearchFocused(false);
+                  }
+                }}
               />
               {showSuggestions ? (
-                <div className="absolute z-50 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 shadow-xl">
+                <div
+                  className="absolute z-50 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 shadow-xl"
+                  id="city-suggestions-list"
+                  role="listbox"
+                >
                   {suggestions.map((suggestion) => (
                     <button
                       className="block w-full border-b border-slate-800 px-4 py-3 text-left text-sm text-slate-200 transition last:border-none hover:bg-slate-800"
                       key={suggestion.id}
+                      role="option"
+                      aria-label={`${suggestion.name}${suggestion.admin1 ? `, ${suggestion.admin1}` : ""}${
+                        suggestion.country ? `, ${suggestion.country}` : ""
+                      }`}
                       onMouseDown={(event) => {
                         event.preventDefault();
                         selectSuggestion(suggestion);
@@ -1129,6 +1184,28 @@ export default function App() {
                 viewBox={`0 0 ${feelsLikeTrend.width} ${feelsLikeTrend.height}`}
                 preserveAspectRatio="none"
               >
+                {feelsLikeTrend.yTicks.map((tick, index) => (
+                  <g key={`feels-temp-tick-${index}`}>
+                    <line
+                      x1={feelsLikeTrend.padding - 6}
+                      y1={tick.y}
+                      x2={feelsLikeTrend.width - feelsLikeTrend.padding}
+                      y2={tick.y}
+                      stroke="rgba(71,85,105,0.35)"
+                      strokeDasharray="3 4"
+                    />
+                    <text
+                      x={feelsLikeTrend.padding - 8}
+                      y={tick.y + 3}
+                      fill="#94a3b8"
+                      fontSize="11"
+                      textAnchor="end"
+                    >
+                      {Math.round(tick.value)}
+                      {unitSymbol}
+                    </text>
+                  </g>
+                ))}
                 <line
                   x1={feelsLikeTrend.padding}
                   y1={feelsLikeTrend.height - feelsLikeTrend.padding}
@@ -1348,13 +1425,13 @@ export default function App() {
             </div>
             <div className="flex flex-wrap gap-3 text-sm">
               <span className="rounded-full border border-rose-400/40 bg-rose-900/20 px-3 py-1 text-rose-200">
-                Temperature (red)
+                Temperature
               </span>
               <span className="rounded-full border border-emerald-400/40 bg-emerald-900/20 px-3 py-1 text-emerald-200">
-                Wind (green)
+                Wind
               </span>
               <span className="rounded-full border border-sky-400/40 bg-sky-900/20 px-3 py-1 text-sky-200">
-                Precipitation (blue)
+                Precipitation
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -1384,6 +1461,41 @@ export default function App() {
                     height={hourlyChart.height}
                     viewBox={`0 0 ${hourlyChart.width} ${hourlyChart.height}`}
                   >
+                    {hourlyChart.yTicks.map((tick, index) => (
+                      <g key={`hour-temp-tick-${index}`}>
+                        <line
+                          x1={hourlyChart.padding - 6}
+                          y1={tick.y}
+                          x2={hourlyChart.width - hourlyChart.padding}
+                          y2={tick.y}
+                          stroke="rgba(71,85,105,0.35)"
+                          strokeDasharray="3 4"
+                        />
+                        <text
+                          x={hourlyChart.padding - 8}
+                          y={tick.y + 3}
+                          fill="#94a3b8"
+                          fontSize="11"
+                          textAnchor="end"
+                        >
+                          {Math.round(tick.value)}
+                          {unitSymbol}
+                        </text>
+                      </g>
+                    ))}
+                    {visibleHourlyCards.map((hour, index) => {
+                      const x = hourlyChart.padding + index * hourlyChart.stepX;
+                      return (
+                        <line
+                          key={`hour-grid-${hour.time}`}
+                          x1={x}
+                          y1={hourlyChart.padding}
+                          x2={x}
+                          y2={hourlyChart.height - hourlyChart.padding}
+                          stroke="rgba(148,163,184,0.18)"
+                        />
+                      );
+                    })}
                     <line
                       x1={hourlyChart.padding}
                       y1={hourlyChart.height - hourlyChart.padding}
